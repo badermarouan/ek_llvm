@@ -1,7 +1,3 @@
-# IDE
-.idea/
-.vscode/
-
 # Stack
 .stack-work/
 *.cabal
@@ -15,8 +11,6 @@
 # Temp files
 *~
 *.hi
-*.o
-a.out
 
 # Coverage
 test/coverage/
@@ -24,3 +18,56 @@ test/coverage/
 #Lit
 test/functional/.lit_test_times.txt
 test/functional/Output
+
+# macOS Finder files
+.DS_Store
+
+# Cmake build directory
+build/
+
+# clangd directory
+.cache/
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Coverage data
+coverage_html/
+*.profdata
+*.profraw
+*.profraw.*
+Output/
+*.lit*
+test/functional/lit.cfg
+coverage.txt
+
+# IDE files
+.idea/
+.vscode/

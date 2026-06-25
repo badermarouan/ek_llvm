@@ -1,0 +1,16 @@
+# Prepend xcrun on macOS to find tools correctly
+if(APPLE)
+    find_program(XCRUN_PATH xcrun)
+else()
+    set(XCRUN_PATH "")
+endif()
+set(EKC++_PATH "${XCRUN_PATH} ${CMAKE_BINARY_DIR}/tools/ekc++/ekc++")
+set(GLUDEMANGLE_PATH "${XCRUN_PATH} ${CMAKE_BINARY_DIR}/tools/ekc++-demangle/ekc++-demangle")
+find_program(LLDB_CONF lldb)
+
+# Configure lit.cfg with CMake variables
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.in
+    ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg
+    @ONLY
+)

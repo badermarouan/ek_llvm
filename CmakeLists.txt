@@ -1,0 +1,211 @@
+cmake_minimum_required (VERSION 3.29)
+
+set(EKC++_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}/cmake" CACHE PATH "The path to the cmake directory")
+list(APPEND CMAKE_MODULE_PATH ${EKC++_CMAKE_DIR})
+
+# CMake will prevent in-source builds
+set(CMAKE_DISABLE_IN_SOURCE_BUILD YES)
+
+set(CMAKE_C_COMPILER clang CACHE STRING "C compiler to use")
+set(CMAKE_CXX_COMPILER clang++ CACHE STRING "C++ compiler to use")
+set(CMAKE_CXX_STANDARD 26 CACHE STRING "C++ standard to use")
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+project(ekc++ CXX C)
+
+set(EKC++_LLVM_VERSION "22" CACHE STRING "LLVM major version to use (supported: 22)")
+
+
+if(EKC++_LLVM_VERSION STREQUAL "22")
+    set(EKC++_LLVM_VERSION_REQUIRED "22.1")
+    set(EKC++_LLVM_GIT_TAG "llvmorg-22.1.8")
+else()
+    message(FATAL_ERROR "Unsupported LLVM version '${EKC++_LLVM_VERSION}'. Supported versions: 22")
+endif()
+
+message(STATUS "Configuring ekc++ with LLVM ${EKC++_LLVM_VERSION} (find_package >= ${EKC++_LLVM_VERSION_REQUIRED})")
+
+option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+
+option(FROM_SOURCE "Use LLVM built from source" OFF)
+
+if(ENABLE_ASAN AND NOT FROM_SOURCE)
+    message(FATAL_ERROR "ENABLE_ASAN can only be used when building LLVM from source.")
+endif()
+
+if(FROM_SOURCE)
+    include(FetchLLVM)
+    # Disable C++20 module dependency scanning - we don't use them
+    set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+else()
+    find_package(LLVM ${EKC++_LLVM_VERSION_REQUIRED} REQUIRED CONFIG)
+    message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+    message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+    include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
+    add_definitions(${LLVM_DEFINITIONS})
+
+    # Find Clang libraries - use the same prefix as LLVM
+    get_filename_component(LLVM_CMAKE_DIR ${LLVM_DIR} DIRECTORY)
+    set(Clang_DIR "${LLVM_CMAKE_DIR}/clang")
+    find_package(Clang REQUIRED CONFIG)
+    message(STATUS "Found Clang")
+endif()
+
+include(UnixCompileRules)
+
+if(ENABLE_ASAN)
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+endif()
+
+option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+
+if(ENABLE_COVERAGE)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fprofile-instr-generate -fcoverage-mapping")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fprofile-instr-generate -fcoverage-mapping")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fprofile-instr-generate -fcoverage-mapping")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fprofile-instr-generate -fcoverage-mapping")
+    message(STATUS "Code coverage instrumentation enabled")
+endif()
+
+# libs
+add_subdirectory(./ekc++-app/lib/Bytecode)
+add_subdirectory(./ekc++-app/lib/IRGen)
+add_subdirectory(./ekc++-app/lib/Runtime)
+
+# tools
+add_subdirectory(./ekc++-app/tools/ekc++)
+
+# tests
+add_subdirectory(./ekc++-app/test)
+
+# ============================================================
+# Haskell / Stack EK targets (migrated from Makefile)
+# ============================================================
+find_program(STACK stack)
+find_program(LIT   lit)
+
+if(STACK)
+    set(EK_STDLIB_PATH "${CMAKE_SOURCE_DIR}/stdlib")
+
+    # Resolve stack output paths at configure time.
+    # stack path does not require a prior build — the paths are deterministic.
+    execute_process(
+        COMMAND ${STACK} path --local-install-root
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE EK_STACK_INSTALL_ROOT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    execute_process(
+        COMMAND ${STACK} path --local-bin
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE EK_STACK_LOCAL_BIN
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    # Derive stdlib install path: $(stack path --local-bin)/../lib/ek
+    cmake_path(GET EK_STACK_LOCAL_BIN PARENT_PATH EK_STDLIB_INSTALL_PATH)
+    string(APPEND EK_STDLIB_INSTALL_PATH "/lib/ek")
+
+    if(EK_STACK_INSTALL_ROOT)
+        message(STATUS "stack local-install-root: ${EK_STACK_INSTALL_ROOT}")
+        message(STATUS "stack local-bin:          ${EK_STACK_LOCAL_BIN}")
+    else()
+        message(WARNING "Could not determine stack paths — run 'stack setup' if needed")
+    endif()
+
+    # all — stack build then copy produced binaries to the source root
+    add_custom_target(ek_build
+        COMMAND ${STACK} build
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${EK_STACK_INSTALL_ROOT}/bin"
+            "${CMAKE_SOURCE_DIR}"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Building EK Haskell project (stack build)"
+        VERBATIM
+    )
+
+    # clean — remove GHC intermediate files (.hi / .o)
+    add_custom_target(ek_clean
+        COMMAND find "${CMAKE_SOURCE_DIR}" -name "*.hi" -delete
+        COMMAND find "${CMAKE_SOURCE_DIR}" -name "*.o"  -delete
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Removing EK Haskell intermediate files (.hi / .o)"
+        VERBATIM
+    )
+
+    # fclean — clean + remove produced binaries + .stack-work
+    add_custom_target(ek_fclean
+        COMMAND find "${CMAKE_SOURCE_DIR}" -name "*.hi" -delete
+        COMMAND find "${CMAKE_SOURCE_DIR}" -name "*.o"  -delete
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "${CMAKE_SOURCE_DIR}/glados"
+            "${CMAKE_SOURCE_DIR}/ekc"
+            "${CMAKE_SOURCE_DIR}/ek"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_SOURCE_DIR}/.stack-work"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Full clean of EK Haskell project"
+        VERBATIM
+    )
+
+    # re — fclean then build from scratch (commands inlined for sequential execution)
+    add_custom_target(ek_re
+        COMMAND find "${CMAKE_SOURCE_DIR}" -name "*.hi" -delete
+        COMMAND find "${CMAKE_SOURCE_DIR}" -name "*.o"  -delete
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "${CMAKE_SOURCE_DIR}/glados"
+            "${CMAKE_SOURCE_DIR}/ekc"
+            "${CMAKE_SOURCE_DIR}/ek"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_SOURCE_DIR}/.stack-work"
+        COMMAND ${STACK} build
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${EK_STACK_INSTALL_ROOT}/bin"
+            "${CMAKE_SOURCE_DIR}"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Rebuilding EK Haskell project from scratch (fclean + build)"
+        VERBATIM
+    )
+
+    # tests_run — unit tests with coverage report
+    add_custom_target(ek_tests
+        COMMAND ${STACK} test --coverage
+        COMMAND ${STACK} hpc report --all --destdir test/coverage
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running EK tests with coverage"
+        VERBATIM
+    )
+
+    # functional_test — depends on ek_build, then run lit functional tests
+    if(LIT)
+        add_custom_target(ek_functional_test
+            COMMAND ${LIT} -v "${CMAKE_SOURCE_DIR}/test/functional"
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            COMMENT "Running EK functional tests (lit)"
+            VERBATIM
+        )
+        add_dependencies(ek_functional_test ek_build)
+    else()
+        message(STATUS "lit not found — ek_functional_test target is unavailable")
+    endif()
+
+    # install — stack install + copy stdlib *.ek files
+    add_custom_target(ek_install
+        COMMAND ${STACK} install
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${EK_STDLIB_INSTALL_PATH}"
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${EK_STDLIB_PATH}/bool.ek"
+            "${EK_STDLIB_PATH}/builtins.ek"
+            "${EK_STDLIB_PATH}/list.ek"
+            "${EK_STDLIB_PATH}/rpn.ek"
+            "${EK_STDLIB_PATH}/std.ek"
+            "${EK_STDLIB_INSTALL_PATH}"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Installing EK binaries and stdlib"
+        VERBATIM
+    )
+
+    message(STATUS "EK Haskell targets available: ek_build, ek_clean, ek_fclean, ek_re, ek_tests, ek_install")
+else()
+    message(STATUS "stack not found — EK Haskell targets (ek_build, ek_clean, …) are unavailable")
+endif()
