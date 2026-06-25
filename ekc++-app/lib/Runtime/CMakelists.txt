@@ -1,0 +1,16 @@
+add_library (Runtime SHARED)
+
+target_include_directories(Runtime
+    PUBLIC
+    ${CMAKE_SOURCE_DIR}/ekc++-app/include/Runtime
+)
+
+target_link_libraries(Runtime
+    PUBLIC
+        LLVM
+)
+
+target_sources(Runtime
+    PRIVATE
+        Runtime.cpp
+)
